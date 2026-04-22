@@ -1,0 +1,26 @@
+# 数据目录（原始数据集可从公开渠道获取）
+data/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 大型结果文件（保留配置和小型 CSV，但忽略大型 npy）
+results/*.npy
+
+# 虚拟环境
+venv/
+.env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

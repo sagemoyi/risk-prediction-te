@@ -47,9 +47,10 @@
 
 ```
 项目文件夹/
-├── src/                          ← 源代码（不要直接改）
+├── src/                          ← 源代码
 │   ├── risk_pipeline.py          ← 核心：数据→风险序列→样本
-│   └── train_models.py           ← 神经网络训练代码（待补充）
+│   ├── data_loader.py            ← 数据加载适配器（支持模拟/CSV/MAT）
+│   └── train_models.py           ← 神经网络训练代码（LSTM/Bi-LSTM/Attention-Bi-LSTM）
 ├── data/                         ← 放数据的地方
 │   ├── faultfreetesting.mat      ← 真实TEP数据（如果有的话）
 │   └── ...                       ← 其他数据文件
@@ -87,7 +88,12 @@
 打开命令行（Windows 的 cmd 或 Mac 的终端），输入下面这行命令：
 
 ```bash
-pip install numpy pandas matplotlib scipy pywt
+pip install -r requirements.txt
+```
+
+或者手动逐个安装：
+```bash
+pip install numpy pandas matplotlib scipy PyWavelets torch
 ```
 
 这行命令会安装 5 个工具包：
@@ -208,28 +214,39 @@ Pipeline 完成！下一步：用 X_train/y_train 训练 LSTM/Bi-LSTM/Attention-
 
 ### 5.4 拿到真实数据后怎么用？
 
-假设你拿到了 `.csv` 格式的真实数据（最简单），只需改一行代码：
+**方法：修改 `src/risk_pipeline.py` 里的两个地方**
 
-**当前代码**（用模拟数据）：
+**第1步**：把 `DATA_SOURCE` 从 `'simulated'` 改成 `'csv'`：
+
 ```python
-# 在 risk_pipeline.py 的第 470 行附近
-df_normal = generate_tep_data(n_samples, mode='normal', seed=42)
-df_fault4 = generate_tep_data(n_samples, mode='fault4', seed=43)
-df_fault11 = generate_tep_data(n_samples, mode='fault11', seed=44)
+# 在 src/risk_pipeline.py 第55行附近
+DATA_SOURCE = 'csv'  # 改成这个
 ```
 
-**改成真实数据**：
-```python
-# 假设你的真实数据文件叫 normal.csv, fault4.csv, fault11.csv
-df_normal = pd.read_csv('data/normal.csv')
-df_fault4 = pd.read_csv('data/fault4.csv')
-df_fault11 = pd.read_csv('data/fault11.csv')
+**第2步**：修改 `CSV_PATHS` 指向你的真实数据文件：
 
-# 如果数据里列名不是 XMEAS1~XMEAS22，需要重命名
-# df_normal.columns = ['XMEAS1', 'XMEAS2', ..., 'XMEAS22']
+```python
+CSV_PATHS = {
+    'normal_path':  'data/normal.csv',
+    'fault4_path':  'data/fault4.csv',
+    'fault11_path': 'data/fault11.csv',
+}
 ```
 
-就这么简单！其他代码完全不用改。
+**对数据文件的要求**：
+- CSV 文件包含至少 `XMEAS1` ~ `XMEAS22` 这22列
+- 列名可以是 `XMEAS1, XMEAS2, ...` 或 `xmeas_1, xmeas_2, ...`
+- 每个文件是一维时间序列（一行一个时间点，一列一个变量）
+
+修改完这两处后，直接运行 `python src/risk_pipeline.py` 即可。
+
+如果数据是 `.mat` 格式（MATLAB文件），建议先用 MATLAB 导出为 CSV：
+```matlab
+% 在 MATLAB 中
+writetable(your_table, 'data.csv')
+```
+
+其他代码完全不用改。
 
 ---
 
@@ -376,9 +393,10 @@ Windows 常见中文字体路径：`C:/Windows/Fonts/simhei.ttf`（黑体）
 
 ### 现在（中期答辩前）：
 1. ✅ 跑通风险序列生成代码（已完成）
-2. ⬜ 训练 LSTM / Bi-LSTM / Attention-Bi-LSTM（下一步）
-3. ⬜ 生成预测对比图
-4. ⬜ 做 PPT
+2. ✅ 训练 LSTM / Bi-LSTM / Attention-Bi-LSTM（已完成）
+3. ✅ 生成预测对比图（运行 train_models.py 自动生成）
+4. ⬜ 用真实数据替换模拟数据，重新跑一遍
+5. ⬜ 把图放到 PPT 里
 
 ### 中期答辩后：
 5. ⬜ 拿到真实 TEP 数据

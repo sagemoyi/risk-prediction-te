@@ -21,6 +21,21 @@ venv/
 *.swp
 *.swo
 
+# 日志与临时文件
+*.log
+*.tmp
+commit.txt
+remote.txt
+github
+REVIEW_REPORT.md
+
+# 打包文件
+*.tar.gz
+*.zip
+
+# 重复/备份目录
+repo/
+
 # OS
 .DS_Store
 Thumbs.db

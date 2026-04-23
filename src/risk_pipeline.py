@@ -54,12 +54,12 @@ CONFIG = {
 # ============================================================
 DATA_SOURCE = 'simulated'  # ← 拿到真实数据后，改成 'csv'
 
-# 如果用 CSV，取消下面注释并填写正确路径：
-# CSV_PATHS = {
-#     'normal_path':  'data/normal.csv',
-#     'fault4_path':  'data/fault4.csv',
-#     'fault11_path': 'data/fault11.csv',
-# }
+# 如果用 CSV，修改下面的路径指向你的真实数据文件
+CSV_PATHS = {
+    'normal_path':  'data/normal.csv',
+    'fault4_path':  'data/fault4.csv',
+    'fault11_path': 'data/fault11.csv',
+}
 
 # 设置中文字体（解决图里中文显示方块的问题）
 from matplotlib import font_manager

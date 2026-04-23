@@ -1,0 +1,9 @@
+# 项目依赖清单
+# 安装方式: pip install -r requirements.txt
+
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+scipy>=1.10.0
+PyWavelets>=1.4.0
+torch>=2.0.0

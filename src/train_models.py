@@ -510,6 +510,39 @@ def plot_metrics_bar(results_dict, save_path='figures/05_metrics_comparison.png'
     print(f"已保存指标对比图: {save_path}")
 
 
+def plot_loss_curves(loss_history_dict, save_path='figures/06_loss_curves.png'):
+    """绘制三种模型的训练/验证损失曲线"""
+    models = list(loss_history_dict.keys())
+    colors = {
+        'train': '#2E86AB',
+        'val': '#E85D04',
+    }
+
+    fig, axes = plt.subplots(1, len(models), figsize=(5 * len(models), 4))
+    if len(models) == 1:
+        axes = [axes]
+
+    for ax, model_name in zip(axes, models):
+        history = loss_history_dict[model_name]
+        train_loss = history['train']
+        val_loss = history['val']
+        epochs = np.arange(1, len(train_loss) + 1)
+
+        ax.plot(epochs, train_loss, label='训练损失', color=colors['train'], linewidth=1.5)
+        ax.plot(epochs, val_loss, label='验证损失', color=colors['val'], linewidth=1.5, linestyle='--')
+        ax.set_title(model_name, fontsize=12)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9)
+
+    plt.suptitle('模型训练过程损失曲线', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"已保存损失曲线图: {save_path}")
+
+
 # ============================================================
 # 6. 主函数
 # ============================================================
@@ -633,6 +666,11 @@ def main(config_path=None):
         'Bi-LSTM': result_bilstm,
         'Attention-Bi-LSTM': result_att,
     }
+    loss_history_dict = {
+        'LSTM': loss_lstm,
+        'Bi-LSTM': loss_bilstm,
+        'Attention-Bi-LSTM': loss_att,
+    }
     
     print("\n" + "=" * 60)
     print("[INFO] 三模型指标汇总")
@@ -669,6 +707,7 @@ def main(config_path=None):
     print("\n[可视化] 生成图表...")
     plot_predictions(y_test, results_dict, save_path=os.path.join(figures_dir, '04_prediction_comparison.png'))
     plot_metrics_bar(results_dict, save_path=os.path.join(figures_dir, '05_metrics_comparison.png'))
+    plot_loss_curves(loss_history_dict, save_path=os.path.join(figures_dir, '06_loss_curves.png'))
     
     print("\n" + "=" * 60)
     print("[OK] 全部完成！")

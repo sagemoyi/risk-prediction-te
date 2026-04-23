@@ -143,7 +143,7 @@ def load_csv_data(normal_path, fault4_path, fault11_path):
     missing = needed - available
     
     if missing:
-        print(f"  ⚠️ 警告：缺少以下变量: {sorted(missing)}")
+        print(f"  [WARN] 警告：缺少以下变量: {sorted(missing)}")
         print(f"  可用变量: {sorted(available)[:10]}...")
         raise ValueError(f"CSV 文件缺少必要的变量: {missing}")
     
@@ -197,7 +197,7 @@ def load_mat_data(filepath, fault_number=0):
     
     # 如果是 table 结构，尝试解析
     # （这部分可能因 MATLAB 版本不同而变化）
-    print("  ⚠️ 标准数组未找到，尝试解析 MATLAB table 结构...")
+    print("  [WARN] 标准数组未找到，尝试解析 MATLAB table 结构...")
     print("  如果解析失败，建议用 MATLAB 将数据导出为 CSV 格式。")
     
     raise NotImplementedError(

@@ -4,12 +4,14 @@
 用法:
     1. 确保已运行过 risk_pipeline.py 生成训练数据
     2. 运行: python src/train_models.py
+       或者: python src/train_models.py --config config/default.json
     3. 结果保存在 results/ 和 figures/ 文件夹中
 
 依赖:
     pip install torch numpy pandas matplotlib
 """
 
+import argparse
 import copy
 import os
 import numpy as np
@@ -19,10 +21,12 @@ import json
 import warnings
 warnings.filterwarnings('ignore')
 
+from config_loader import PROJECT_ROOT, load_project_config, resolve_project_path
+
 # 尝试加载中文字体
 try:
     from matplotlib import font_manager
-    font_manager.fontManager.addfont('src/SourceHanSansSC-Regular.otf')
+    font_manager.fontManager.addfont(str(PROJECT_ROOT / 'src' / 'SourceHanSansSC-Regular.otf'))
     plt.rcParams['font.family'] = 'Source Han Sans SC'
 except:
     plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
@@ -54,21 +58,24 @@ except ImportError:
 # ============================================================
 # 1. 加载训练数据
 # ============================================================
-def load_data():
+def load_data(results_dir='results', val_ratio=0.1, batch_size=32):
     """从 risk_pipeline.py 生成的 .npy 文件加载数据"""
     print("\n[Step 0] 加载训练数据...")
     
     try:
-        X_train = np.load('results/X_train.npy')
-        y_train = np.load('results/y_train.npy')
-        X_test = np.load('results/X_test.npy')
-        y_test = np.load('results/y_test.npy')
+        X_train = np.load(os.path.join(results_dir, 'X_train.npy'))
+        y_train = np.load(os.path.join(results_dir, 'y_train.npy'))
+        X_test = np.load(os.path.join(results_dir, 'X_test.npy'))
+        y_test = np.load(os.path.join(results_dir, 'y_test.npy'))
     except FileNotFoundError:
         print("[ERROR] 找不到训练数据文件！")
         print("   请先运行: python src/risk_pipeline.py")
         exit(1)
     
-    val_size = max(1, int(len(X_train) * 0.1))
+    if not 0 < val_ratio < 1:
+        raise ValueError(f"val_ratio 必须在 0 和 1 之间，当前值为: {val_ratio}")
+
+    val_size = max(1, int(len(X_train) * val_ratio))
     if val_size >= len(X_train):
         val_size = len(X_train) - 1
 
@@ -97,8 +104,8 @@ def load_data():
     # 构建 DataLoader
     train_dataset = TensorDataset(X_train_t, y_train_t)
     val_dataset = TensorDataset(X_val_t, y_val_t)
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     return train_loader, val_loader, X_test_t, y_test_t
 
@@ -187,7 +194,7 @@ class AttentionBiLSTMModel(nn.Module):
         score = v^T · tanh(W_h · h + W_s · s)
         其中 h 是所有时间步的隐藏状态，s 是前一步的输出
     """
-    def __init__(self, input_size=1, hidden_size=128, num_layers=2, output_size=1):
+    def __init__(self, input_size=1, hidden_size=128, num_layers=2, attention_dim=64, output_size=1):
         super(AttentionBiLSTMModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -202,8 +209,6 @@ class AttentionBiLSTMModel(nn.Module):
         )
         
         # 加性 Attention 参数
-        # attention_dim 是一个中间维度，可以调
-        attention_dim = 64
         self.W_h = nn.Linear(hidden_size * 2, attention_dim)  # 把隐藏状态映射到 attention_dim
         self.W_s = nn.Linear(hidden_size * 2, attention_dim)  # 把"前一步输出"映射到 attention_dim
         self.v = nn.Linear(attention_dim, 1, bias=False)       # 计算注意力得分
@@ -271,8 +276,9 @@ def train_model(model, train_loader, val_loader, model_name, epochs=50, lr=1e-3,
     返回:
         训练好的模型
     """
+    batch_size = train_loader.batch_size or 32
     print(f"\n[训练] {model_name}")
-    print(f"  参数: epochs={epochs}, lr={lr}, batch_size=32")
+    print(f"  参数: epochs={epochs}, lr={lr}, batch_size={batch_size}")
     
     model = model.to(device)
     criterion = nn.MSELoss()           # 损失函数：均方误差（论文用的 MSE）
@@ -418,7 +424,7 @@ def plot_predictions(y_test, results_dict, save_path='figures/04_prediction_comp
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
     # 只画前500个点，太多看不清
-    n_show = 500
+    n_show = min(500, len(y_true), *(len(result['y_pred']) for result in results_dict.values()))
     t = np.arange(n_show)
     
     # 图1: LSTM
@@ -507,57 +513,117 @@ def plot_metrics_bar(results_dict, save_path='figures/05_metrics_comparison.png'
 # ============================================================
 # 6. 主函数
 # ============================================================
-def main():
-    os.makedirs('results', exist_ok=True)
-    os.makedirs('figures', exist_ok=True)
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='神经网络训练脚本')
+    parser.add_argument(
+        '--config',
+        default=None,
+        help='配置文件路径，默认使用 config/default.json'
+    )
+    return parser.parse_args()
 
-    torch.manual_seed(42)
-    np.random.seed(42)
+
+def main(config_path=None):
+    config, resolved_config_path = load_project_config(config_path)
+    training_config = config['training']
+    output_config = config['output']
+
+    results_dir = str(resolve_project_path(output_config['results_dir']))
+    figures_dir = str(resolve_project_path(output_config['figures_dir']))
+
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(figures_dir, exist_ok=True)
+
+    torch.manual_seed(training_config['seed'])
+    np.random.seed(training_config['seed'])
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
+        torch.cuda.manual_seed_all(training_config['seed'])
 
     print("=" * 60)
     print("神经网络训练脚本")
     print("模型: LSTM / Bi-LSTM / Attention-Bi-LSTM")
     print("=" * 60)
-    print("\n[WARN] 提示：默认 epochs=50 适合快速验证。")
-    print("    论文用的 epochs=500，若算力充足可在下面修改。")
+    print(f"[INFO] 使用配置文件: {resolved_config_path}")
+    print(f"\n[WARN] 提示：当前 epochs={training_config['epochs']}。")
+    print("    论文用的 epochs=500，若算力充足可在配置文件里修改。")
     print("    CPU 上跑 50 epoch 大约需要 2~5 分钟。")
     
     # 设置设备
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    requested_device = training_config.get('device', 'auto')
+    if requested_device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    elif requested_device == 'cuda' and not torch.cuda.is_available():
+        print("[WARN] 配置要求使用 CUDA，但当前不可用，自动回退到 CPU。")
+        device = 'cpu'
+    else:
+        device = requested_device
+
     print(f"\n使用设备: {device}")
     if device == 'cpu':
         print("（提示：如果有 NVIDIA 显卡且装了 CUDA，训练会快很多）")
     
     # 加载数据
-    train_loader, val_loader, X_test, y_test = load_data()
+    train_loader, val_loader, X_test, y_test = load_data(
+        results_dir=results_dir,
+        val_ratio=training_config['val_ratio'],
+        batch_size=training_config['batch_size']
+    )
     
     # 获取参数
-    seq_len = X_test.shape[1]      # 12
     input_size = X_test.shape[2]   # 1
     
-    # 训练轮数设置（论文用500，这里默认50快速验证，可按需修改）
-    EPOCHS = 50
+    epochs = training_config['epochs']
+    hidden_size = training_config['hidden_size']
+    num_layers = training_config['num_layers']
+    attention_dim = training_config['attention_dim']
+    learning_rate = training_config['learning_rate']
+    patience = training_config['patience']
     
     # -------- 训练 LSTM --------
-    model_lstm = LSTMModel(input_size=input_size, hidden_size=128, num_layers=2)
+    model_lstm = LSTMModel(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers)
     model_lstm, loss_lstm = train_model(
-        model_lstm, train_loader, val_loader, 'LSTM', epochs=EPOCHS, device=device
+        model_lstm,
+        train_loader,
+        val_loader,
+        'LSTM',
+        epochs=epochs,
+        lr=learning_rate,
+        device=device,
+        patience=patience
     )
     result_lstm = evaluate_model(model_lstm, X_test, y_test, 'LSTM', device=device)
     
     # -------- 训练 Bi-LSTM --------
-    model_bilstm = BiLSTMModel(input_size=input_size, hidden_size=128, num_layers=2)
+    model_bilstm = BiLSTMModel(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers)
     model_bilstm, loss_bilstm = train_model(
-        model_bilstm, train_loader, val_loader, 'Bi-LSTM', epochs=EPOCHS, device=device
+        model_bilstm,
+        train_loader,
+        val_loader,
+        'Bi-LSTM',
+        epochs=epochs,
+        lr=learning_rate,
+        device=device,
+        patience=patience
     )
     result_bilstm = evaluate_model(model_bilstm, X_test, y_test, 'Bi-LSTM', device=device)
     
     # -------- 训练 Attention-Bi-LSTM --------
-    model_att = AttentionBiLSTMModel(input_size=input_size, hidden_size=128, num_layers=2)
+    model_att = AttentionBiLSTMModel(
+        input_size=input_size,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        attention_dim=attention_dim
+    )
     model_att, loss_att = train_model(
-        model_att, train_loader, val_loader, 'Attention-Bi-LSTM', epochs=EPOCHS, device=device
+        model_att,
+        train_loader,
+        val_loader,
+        'Attention-Bi-LSTM',
+        epochs=epochs,
+        lr=learning_rate,
+        device=device,
+        patience=patience
     )
     result_att = evaluate_model(model_att, X_test, y_test, 'Attention-Bi-LSTM', device=device)
     
@@ -579,34 +645,40 @@ def main():
     print(summary_df.to_string())
     
     # -------- 保存结果 --------
-    summary_df.to_csv('results/model_comparison.csv')
-    print("\n已保存: results/model_comparison.csv")
+    summary_df.to_csv(os.path.join(results_dir, 'model_comparison.csv'))
+    print(f"\n已保存: {os.path.join(output_config['results_dir'], 'model_comparison.csv')}")
     
     # 保存每个模型的预测值
-    np.save('results/y_pred_lstm.npy', result_lstm['y_pred'])
-    np.save('results/y_pred_bilstm.npy', result_bilstm['y_pred'])
-    np.save('results/y_pred_attention.npy', result_att['y_pred'])
-    print("已保存预测结果: results/y_pred_*.npy")
+    np.save(os.path.join(results_dir, 'y_pred_lstm.npy'), result_lstm['y_pred'])
+    np.save(os.path.join(results_dir, 'y_pred_bilstm.npy'), result_bilstm['y_pred'])
+    np.save(os.path.join(results_dir, 'y_pred_attention.npy'), result_att['y_pred'])
+    print(f"已保存预测结果: {os.path.join(output_config['results_dir'], 'y_pred_*.npy')}")
 
     # 保存模型权重
-    torch.save(model_lstm.state_dict(), 'results/model_lstm.pt')
-    torch.save(model_bilstm.state_dict(), 'results/model_bilstm.pt')
-    torch.save(model_att.state_dict(), 'results/model_attention.pt')
-    print("已保存模型权重: results/model_*.pt")
+    if output_config.get('save_weights', True):
+        torch.save(model_lstm.state_dict(), os.path.join(results_dir, 'model_lstm.pt'))
+        torch.save(model_bilstm.state_dict(), os.path.join(results_dir, 'model_bilstm.pt'))
+        torch.save(model_att.state_dict(), os.path.join(results_dir, 'model_attention.pt'))
+        print(f"已保存模型权重: {os.path.join(output_config['results_dir'], 'model_*.pt')}")
+
+    with open(os.path.join(results_dir, 'train_config.json'), 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    print(f"已保存训练配置: {os.path.join(output_config['results_dir'], 'train_config.json')}")
     
     # -------- 可视化 --------
     print("\n[可视化] 生成图表...")
-    plot_predictions(y_test, results_dict)
-    plot_metrics_bar(results_dict)
+    plot_predictions(y_test, results_dict, save_path=os.path.join(figures_dir, '04_prediction_comparison.png'))
+    plot_metrics_bar(results_dict, save_path=os.path.join(figures_dir, '05_metrics_comparison.png'))
     
     print("\n" + "=" * 60)
     print("[OK] 全部完成！")
-    print("  图表在 figures/ 文件夹里")
-    print("  结果在 results/ 文件夹里")
+    print(f"  图表在 {output_config['figures_dir']}/ 文件夹里")
+    print(f"  结果在 {output_config['results_dir']}/ 文件夹里")
     print("=" * 60)
     
     return results_dict
 
 
 if __name__ == '__main__':
-    main()
+    args = parse_args()
+    main(config_path=args.config)

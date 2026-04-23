@@ -47,6 +47,8 @@
 
 ```
 项目文件夹/
+├── config/                       ← 统一配置入口
+│   └── default.json             ← 默认实验参数（数据源 / epoch / batch 等）
 ├── src/                          ← 源代码
 │   ├── risk_pipeline.py          ← 核心：数据→风险序列→样本
 │   ├── data_loader.py            ← 数据加载适配器（支持模拟/CSV/MAT）
@@ -58,7 +60,8 @@
 │   ├── risk_sequences.csv        ← 三工况风险序列
 │   ├── X_train.npy / y_train.npy ← 训练样本
 │   ├── X_test.npy / y_test.npy   ← 测试样本
-│   └── config.json               ← 参数配置
+│   ├── config.json               ← 本次 Pipeline 使用的配置快照
+│   └── train_config.json         ← 本次训练使用的配置快照
 ├── figures/                      ← 运行后自动生成的图
 │   ├── 01_entropy_raw.png        ← 原始结构熵对比图
 │   ├── 02_risk_sequences.png     ← 风险序列对比图（中期PPT用这张）
@@ -131,6 +134,12 @@ pip install PyWavelets
    python src/risk_pipeline.py
    ```
 
+默认会读取 `config/default.json`。如果你想显式指定配置文件，可以：
+
+```bash
+python src/risk_pipeline.py --config config/default.json
+```
+
 如果一切正常，你会看到类似这样的输出：
 
 ```
@@ -155,7 +164,27 @@ Pipeline 完成！下一步：用 X_train/y_train 训练 LSTM/Bi-LSTM/Attention-
 
 运行完成后，`figures/` 文件夹里会多出几张图，`results/` 文件夹里会多出 `.csv` 和 `.npy` 文件。
 
-### 4.2 查看生成的图
+### 4.2 怎么改参数（推荐做法）
+
+现在不需要回代码里改 `epoch`、`step_size`、`DATA_SOURCE` 这些参数了。
+
+直接打开 `config/default.json`，你最常会改的通常是：
+- `data.source`：`simulated` 或 `csv`
+- `data.normal_path / fault4_path / fault11_path`：真实数据路径
+- `data.simulated_samples`：模拟数据长度
+- `pipeline.step_size`：滑动窗口步长
+- `training.epochs`：训练轮数
+- `training.batch_size`：batch 大小
+- `training.learning_rate`：学习率
+- `training.patience`：early stopping 容忍轮数
+
+如果你想保留默认配置不动，也可以复制一份新配置，比如 `config/paper_500.json`，然后运行：
+
+```bash
+python src/train_models.py --config config/paper_500.json
+```
+
+### 4.3 查看生成的图
 
 打开 `figures/` 文件夹，双击 `02_risk_sequences.png` 即可查看风险序列对比图。
 
@@ -214,22 +243,31 @@ Pipeline 完成！下一步：用 X_train/y_train 训练 LSTM/Bi-LSTM/Attention-
 
 ### 5.4 拿到真实数据后怎么用？
 
-**方法：修改 `src/risk_pipeline.py` 里的两个地方**
+**方法：修改 `config/default.json`**
 
-**第1步**：把 `DATA_SOURCE` 从 `'simulated'` 改成 `'csv'`：
+把 `data.source` 从 `simulated` 改成 `csv`：
 
-```python
-# 在 src/risk_pipeline.py 第55行附近
-DATA_SOURCE = 'csv'  # 改成这个
+```json
+{
+  "data": {
+    "source": "csv",
+    "normal_path": "data/normal.csv",
+    "fault4_path": "data/fault4.csv",
+    "fault11_path": "data/fault11.csv"
+  }
+}
 ```
 
-**第2步**：修改 `CSV_PATHS` 指向你的真实数据文件：
+如果你的真实文件名不是这三个，就把路径改成你自己的文件名。例如：
 
-```python
-CSV_PATHS = {
-    'normal_path':  'data/normal.csv',
-    'fault4_path':  'data/fault4.csv',
-    'fault11_path': 'data/fault11.csv',
+```json
+{
+  "data": {
+    "source": "csv",
+    "normal_path": "data/TEP_normal.csv",
+    "fault4_path": "data/TEP_fault4.csv",
+    "fault11_path": "data/TEP_fault11.csv"
+  }
 }
 ```
 
@@ -238,7 +276,7 @@ CSV_PATHS = {
 - 列名可以是 `XMEAS1, XMEAS2, ...` 或 `xmeas_1, xmeas_2, ...`
 - 每个文件是一维时间序列（一行一个时间点，一列一个变量）
 
-修改完这两处后，直接运行 `python src/risk_pipeline.py` 即可。
+改完后直接运行 `python src/risk_pipeline.py` 即可。
 
 如果数据是 `.mat` 格式（MATLAB文件），建议先用 MATLAB 导出为 CSV：
 ```matlab
@@ -348,9 +386,9 @@ Windows 常见中文字体路径：`C:/Windows/Fonts/simhei.ttf`（黑体）
 
 **原因**：滑动窗口步长为1，数据量很大（12000个点产生约11850个窗口）。
 
-**解决**：如果只是测试代码能不能跑通，可以改小参数：
-- 把 `n_samples = 12000` 改成 `n_samples = 3000`
-- 或者把 `step_size = 1` 改成 `step_size = 5`（每5步取一个窗口）
+**解决**：如果只是测试代码能不能跑通，可以在 `config/default.json` 里改小参数：
+- 把 `data.simulated_samples` 从 `12000` 改成 `3000`
+- 或者把 `pipeline.step_size` 从 `1` 改成 `5`（每5步取一个窗口）
 
 注意：中期答辩展示时，还是用 `step_size = 1` 的结果更好看。
 

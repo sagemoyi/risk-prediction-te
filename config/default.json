@@ -1,0 +1,64 @@
+{
+  "data": {
+    "source": "simulated",
+    "normal_path": "data/normal.csv",
+    "fault4_path": "data/fault4.csv",
+    "fault11_path": "data/fault11.csv",
+    "simulated_samples": 12000,
+    "simulated_seed": 42
+  },
+  "pipeline": {
+    "variables": 22,
+    "window_size": 150,
+    "step_size": 1,
+    "corr_threshold": 0.2,
+    "lookback": 12,
+    "wavelet": "db4",
+    "wavelet_level": 3,
+    "train_size": 6000,
+    "test_size": 3000,
+    "risk_levels": [
+      [
+        0.0,
+        0.3,
+        "Low",
+        "低风险"
+      ],
+      [
+        0.3,
+        0.6,
+        "Lower",
+        "较低风险"
+      ],
+      [
+        0.6,
+        0.9,
+        "Higher",
+        "较高风险"
+      ],
+      [
+        0.9,
+        1.0,
+        "High",
+        "高风险"
+      ]
+    ]
+  },
+  "training": {
+    "seed": 42,
+    "epochs": 50,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "hidden_size": 128,
+    "num_layers": 2,
+    "attention_dim": 64,
+    "val_ratio": 0.1,
+    "patience": 10,
+    "device": "auto"
+  },
+  "output": {
+    "results_dir": "results",
+    "figures_dir": "figures",
+    "save_weights": true
+  }
+}

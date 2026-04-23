@@ -8,11 +8,13 @@ TEP 风险序列生成 Pipeline
 用法:
     1. 确保已安装依赖: pip install numpy pandas matplotlib scipy PyWavelets
     2. 运行: python src/risk_pipeline.py
+       或者: python src/risk_pipeline.py --config config/default.json
     3. 结果保存在 results/ 和 figures/ 文件夹中
 
-如果想用真实数据，修改下面的 DATA_SOURCE 变量即可。
+如需调整实验参数，优先修改配置文件。
 """
 
+import argparse
 import os
 import numpy as np
 import pandas as pd
@@ -30,48 +32,18 @@ except ImportError:
         return iterable
 
 # 导入数据加载器
+from config_loader import DEFAULT_CONFIG, PROJECT_ROOT, load_project_config, resolve_project_path
 from data_loader import load_tep_data
 
 # ============================
-# 0. 全局参数配置（已复核，来自蓝本论文）
+# 0. 默认参数配置（已复核，来自蓝本论文）
 # ============================
-CONFIG = {
-    'variables': 22,           # XMEAS1 ~ XMEAS22
-    'window_size': 150,        # 滑动窗口大小（论文确定值）
-    'step_size': 1,            # 移动步长（论文确定值）
-    'corr_threshold': 0.2,     # 相关分析阈值（论文确定值）
-    'lookback': 12,            # 监督样本时间步（论文 Time stride=12）
-    'wavelet': 'db4',          # 小波基函数（论文未给，工程默认值）
-    'wavelet_level': 3,        # 分解层数（论文未给，工程默认值）
-    'train_size': 6000,        # 训练样本数（论文确定值，Fault 11）
-    'test_size': 3000,         # 测试样本数（论文确定值，Fault 11）
-    'risk_levels': [           # 风险分级阈值（原文 Table 1）
-        (0.0, 0.3, 'Low', '低风险'),
-        (0.3, 0.6, 'Lower', '较低风险'),
-        (0.6, 0.9, 'Higher', '较高风险'),
-        (0.9, 1.0, 'High', '高风险'),
-    ]
-}
-
-# ============================================================
-# 【重要】数据来源设置
-# ============================================================
-# 选项1: 'simulated' —— 使用程序自动生成的模拟数据（不需要外部文件）
-# 选项2: 'csv' —— 使用真实 CSV 数据（需要准备 normal.csv, fault4.csv, fault11.csv）
-# ============================================================
-DATA_SOURCE = 'simulated'  # ← 拿到真实数据后，改成 'csv'
-
-# 如果用 CSV，修改下面的路径指向你的真实数据文件
-CSV_PATHS = {
-    'normal_path':  'data/normal.csv',
-    'fault4_path':  'data/fault4.csv',
-    'fault11_path': 'data/fault11.csv',
-}
+CONFIG = DEFAULT_CONFIG['pipeline']
 
 # 设置中文字体（解决图里中文显示方块的问题）
 from matplotlib import font_manager
 try:
-    font_manager.fontManager.addfont('src/SourceHanSansSC-Regular.otf')
+    font_manager.fontManager.addfont(str(PROJECT_ROOT / 'src' / 'SourceHanSansSC-Regular.otf'))
     plt.rcParams['font.family'] = 'Source Han Sans SC'
 except:
     # 如果加载失败，尝试系统默认中文字体
@@ -291,16 +263,20 @@ def normalize_risk_sequence(entropy_dict, mode='global'):
 # ============================
 # 5. 风险分级
 # ============================
-def risk_level(risk_value, levels=CONFIG['risk_levels']):
+def risk_level(risk_value, levels=None):
     """将单个风险值映射为风险等级"""
+    if levels is None:
+        levels = CONFIG['risk_levels']
     for low, high, en, cn in levels:
         if low < risk_value <= high or (low == 0.0 and risk_value == 0.0):
             return en, cn
     return 'High', '高风险'
 
 
-def risk_distribution(risk_sequence, levels=CONFIG['risk_levels']):
+def risk_distribution(risk_sequence, levels=None):
     """统计风险序列在各等级的频数"""
+    if levels is None:
+        levels = CONFIG['risk_levels']
     dist = {name: 0 for _, _, _, name in levels}
     for rv in risk_sequence:
         _, cn = risk_level(rv, levels)
@@ -357,8 +333,11 @@ def split_train_test(X, y, train_size=6000, test_size=3000):
 # ============================
 # 7. 可视化
 # ============================
-def plot_risk_sequences(risk_dict, save_path='figures/risk_sequences.png'):
+def plot_risk_sequences(risk_dict, save_path='figures/risk_sequences.png', risk_levels=None):
     """绘制多工况风险序列对比图"""
+    if risk_levels is None:
+        risk_levels = CONFIG['risk_levels']
+
     plt.figure(figsize=(14, 5))
     colors = {'normal': '#2E86AB', 'fault4': '#A23B72', 'fault11': '#F18F01'}
     labels = {'normal': 'No Fault', 'fault4': 'Fault 4', 'fault11': 'Fault 11'}
@@ -368,7 +347,7 @@ def plot_risk_sequences(risk_dict, save_path='figures/risk_sequences.png'):
                 color=colors.get(name, 'gray'), alpha=0.8, linewidth=0.8)
     
     # 画风险分级虚线
-    for low, high, _, cn in CONFIG['risk_levels'][1:]:
+    for low, high, _, cn in risk_levels[1:]:
         plt.axhline(y=low, color='red', linestyle='--', alpha=0.3, linewidth=0.5)
     
     plt.xlabel('时间窗口索引', fontsize=12)
@@ -383,15 +362,18 @@ def plot_risk_sequences(risk_dict, save_path='figures/risk_sequences.png'):
     print(f'已保存: {save_path}')
 
 
-def plot_risk_distribution(risk_dict, save_path='figures/risk_distribution.png'):
+def plot_risk_distribution(risk_dict, save_path='figures/risk_distribution.png', risk_levels=None):
     """绘制风险分级分布对比图"""
+    if risk_levels is None:
+        risk_levels = CONFIG['risk_levels']
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     colors_bar = ['#2E86AB', '#A23B72', '#F18F01']
     labels = {'normal': 'No Fault', 'fault4': 'Fault 4', 'fault11': 'Fault 11'}
-    level_names = ['低风险', '较低风险', '较高风险', '高风险']
+    level_names = [cn for _, _, _, cn in risk_levels]
     
     for idx, (name, risk) in enumerate(risk_dict.items()):
-        dist = risk_distribution(risk)
+        dist = risk_distribution(risk, levels=risk_levels)
         values = [dist.get(ln, 0) for ln in level_names]
         
         axes[idx].bar(level_names, values, color=colors_bar[idx], alpha=0.8)
@@ -430,45 +412,74 @@ def plot_entropy_raw(entropy_dict, save_path='figures/entropy_raw.png'):
 # ============================
 # 8. 主流程：一键运行
 # ============================
-def main():
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='TEP 风险序列生成 Pipeline')
+    parser.add_argument(
+        '--config',
+        default=None,
+        help='配置文件路径，默认使用 config/default.json'
+    )
+    return parser.parse_args()
+
+
+def main(config_path=None):
     """
     完整 Pipeline 主函数：
     原始数据 → 小波去噪 → 滑动窗口 → 相关网络 → 结构熵 → 归一化 → 监督样本
     """
-    os.makedirs('results', exist_ok=True)
-    os.makedirs('figures', exist_ok=True)
+    config, resolved_config_path = load_project_config(config_path)
+    data_config = config['data']
+    pipeline_config = config['pipeline']
+    output_config = config['output']
+
+    results_dir = str(resolve_project_path(output_config['results_dir']))
+    figures_dir = str(resolve_project_path(output_config['figures_dir']))
+
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(figures_dir, exist_ok=True)
 
     print("=" * 60)
     print("TEP 风险序列生成 Pipeline")
     print("=" * 60)
+    print(f"[INFO] 使用配置文件: {resolved_config_path}")
     
     # -------- Step 0: 加载数据 --------
     print("\n[Step 0] 加载数据...")
     
-    if DATA_SOURCE == 'simulated':
+    if data_config['source'] == 'simulated':
         print("  使用模拟数据（无需外部文件）")
-        df_normal, df_fault4, df_fault11 = load_tep_data('simulated')
-    elif DATA_SOURCE == 'csv':
+        df_normal, df_fault4, df_fault11 = load_tep_data(
+            'simulated',
+            n_samples=data_config['simulated_samples'],
+            seed_base=data_config['simulated_seed']
+        )
+    elif data_config['source'] == 'csv':
         print("  使用 CSV 真实数据")
-        df_normal, df_fault4, df_fault11 = load_tep_data('csv', **CSV_PATHS)
+        df_normal, df_fault4, df_fault11 = load_tep_data(
+            'csv',
+            normal_path=str(resolve_project_path(data_config['normal_path'])),
+            fault4_path=str(resolve_project_path(data_config['fault4_path'])),
+            fault11_path=str(resolve_project_path(data_config['fault11_path']))
+        )
     else:
-        raise ValueError(f"未知的 DATA_SOURCE: {DATA_SOURCE}")
+        raise ValueError(f"未知的数据来源: {data_config['source']}")
     
     print(f"  No Fault: {df_normal.shape}")
     print(f"  Fault 4:  {df_fault4.shape}")
     print(f"  Fault 11: {df_fault11.shape}")
     
     # -------- Step 1: 小波去噪 --------
-    print("\n[Step 1] 小波去噪 (db4, level=3)...")
+    print(f"\n[Step 1] 小波去噪 ({pipeline_config['wavelet']}, level={pipeline_config['wavelet_level']})...")
     data_normal = wavelet_denoise(df_normal.values, 
-                                   wavelet=CONFIG['wavelet'], 
-                                   level=CONFIG['wavelet_level'])
+                                   wavelet=pipeline_config['wavelet'], 
+                                   level=pipeline_config['wavelet_level'])
     data_fault4 = wavelet_denoise(df_fault4.values, 
-                                   wavelet=CONFIG['wavelet'], 
-                                   level=CONFIG['wavelet_level'])
+                                   wavelet=pipeline_config['wavelet'], 
+                                   level=pipeline_config['wavelet_level'])
     data_fault11 = wavelet_denoise(df_fault11.values, 
-                                    wavelet=CONFIG['wavelet'], 
-                                    level=CONFIG['wavelet_level'])
+                                    wavelet=pipeline_config['wavelet'], 
+                                    level=pipeline_config['wavelet_level'])
     
     # 对齐长度（小波重构可能多/少几个点）
     min_len = min(data_normal.shape[0], data_fault4.shape[0], data_fault11.shape[0])
@@ -479,14 +490,30 @@ def main():
     
     # -------- Step 2: 滑动窗口 + 邻接矩阵 --------
     print("\n[Step 2] 滑动窗口构建复杂网络...")
-    print(f"  window={CONFIG['window_size']}, step={CONFIG['step_size']}, threshold={CONFIG['corr_threshold']}")
+    print(
+        f"  window={pipeline_config['window_size']}, "
+        f"step={pipeline_config['step_size']}, "
+        f"threshold={pipeline_config['corr_threshold']}"
+    )
     
     adj_normal, idx_normal = sliding_window_networks(
-        data_normal, CONFIG['window_size'], CONFIG['step_size'], CONFIG['corr_threshold'])
+        data_normal,
+        pipeline_config['window_size'],
+        pipeline_config['step_size'],
+        pipeline_config['corr_threshold']
+    )
     adj_fault4, idx_fault4 = sliding_window_networks(
-        data_fault4, CONFIG['window_size'], CONFIG['step_size'], CONFIG['corr_threshold'])
+        data_fault4,
+        pipeline_config['window_size'],
+        pipeline_config['step_size'],
+        pipeline_config['corr_threshold']
+    )
     adj_fault11, idx_fault11 = sliding_window_networks(
-        data_fault11, CONFIG['window_size'], CONFIG['step_size'], CONFIG['corr_threshold'])
+        data_fault11,
+        pipeline_config['window_size'],
+        pipeline_config['step_size'],
+        pipeline_config['corr_threshold']
+    )
     
     print(f"  No Fault:  {len(adj_normal)} 个窗口")
     print(f"  Fault 4:   {len(adj_fault4)} 个窗口")
@@ -518,22 +545,30 @@ def main():
     # -------- Step 5: 风险分级统计 --------
     print("\n[Step 5] 风险分级分布统计...")
     for name in ['normal', 'fault4', 'fault11']:
-        dist = risk_distribution(risk_dict[name])
+        dist = risk_distribution(risk_dict[name], levels=pipeline_config['risk_levels'])
         label = {'normal': 'No Fault', 'fault4': 'Fault 4', 'fault11': 'Fault 11'}[name]
         print(f"  {label}: {dist}")
     
     # -------- Step 6: 可视化 --------
     print("\n[Step 6] 生成可视化图表...")
-    plot_entropy_raw(entropy_dict, 'figures/01_entropy_raw.png')
-    plot_risk_sequences(risk_dict, 'figures/02_risk_sequences.png')
-    plot_risk_distribution(risk_dict, 'figures/03_risk_distribution.png')
+    plot_entropy_raw(entropy_dict, os.path.join(figures_dir, '01_entropy_raw.png'))
+    plot_risk_sequences(
+        risk_dict,
+        os.path.join(figures_dir, '02_risk_sequences.png'),
+        risk_levels=pipeline_config['risk_levels']
+    )
+    plot_risk_distribution(
+        risk_dict,
+        os.path.join(figures_dir, '03_risk_distribution.png'),
+        risk_levels=pipeline_config['risk_levels']
+    )
     
     # -------- Step 7: 监督样本构造（Fault 11） --------
     print("\n[Step 7] 构造监督学习样本 (Fault 11)...")
     risk_fault11 = risk_dict['fault11']
-    X, y = create_supervised_samples(risk_fault11, lookback=CONFIG['lookback'])
+    X, y = create_supervised_samples(risk_fault11, lookback=pipeline_config['lookback'])
     X_train, y_train, X_test, y_test = split_train_test(
-        X, y, CONFIG['train_size'], CONFIG['test_size'])
+        X, y, pipeline_config['train_size'], pipeline_config['test_size'])
     
     print(f"  总样本: X={X.shape}, y={y.shape}")
     print(f"  训练集: X={X_train.shape}, y={y_train.shape}")
@@ -548,25 +583,31 @@ def main():
         'Fault_4': risk_dict['fault4'],
         'Fault_11': risk_dict['fault11'],
     })
-    risk_df.to_csv('results/risk_sequences.csv', index=False)
-    print("  已保存: results/risk_sequences.csv")
+    risk_df.to_csv(os.path.join(results_dir, 'risk_sequences.csv'), index=False)
+    print(f"  已保存: {os.path.join(output_config['results_dir'], 'risk_sequences.csv')}")
     
     # 保存监督样本
-    np.save('results/X_train.npy', X_train)
-    np.save('results/y_train.npy', y_train)
-    np.save('results/X_test.npy', X_test)
-    np.save('results/y_test.npy', y_test)
-    print("  已保存: results/X_train.npy, y_train.npy, X_test.npy, y_test.npy")
+    np.save(os.path.join(results_dir, 'X_train.npy'), X_train)
+    np.save(os.path.join(results_dir, 'y_train.npy'), y_train)
+    np.save(os.path.join(results_dir, 'X_test.npy'), X_test)
+    np.save(os.path.join(results_dir, 'y_test.npy'), y_test)
+    print(
+        "  已保存: "
+        f"{os.path.join(output_config['results_dir'], 'X_train.npy')}, "
+        f"{os.path.join(output_config['results_dir'], 'y_train.npy')}, "
+        f"{os.path.join(output_config['results_dir'], 'X_test.npy')}, "
+        f"{os.path.join(output_config['results_dir'], 'y_test.npy')}"
+    )
     
     # 保存配置
-    with open('results/config.json', 'w') as f:
-        json.dump({k: v for k, v in CONFIG.items() if k != 'risk_levels'}, f, indent=2)
-    print("  已保存: results/config.json")
+    with open(os.path.join(results_dir, 'config.json'), 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    print(f"  已保存: {os.path.join(output_config['results_dir'], 'config.json')}")
     
     print("\n" + "=" * 60)
     print("[OK] Pipeline 完成！")
-    print("  图表在 figures/ 文件夹里")
-    print("  数据在 results/ 文件夹里")
+    print(f"  图表在 {output_config['figures_dir']}/ 文件夹里")
+    print(f"  数据在 {output_config['results_dir']}/ 文件夹里")
     print("  下一步：训练 LSTM / Bi-LSTM / Attention-Bi-LSTM")
     print("=" * 60)
     
@@ -574,4 +615,5 @@ def main():
 
 
 if __name__ == '__main__':
-    risk_dict, X_train, y_train, X_test, y_test = main()
+    args = parse_args()
+    risk_dict, X_train, y_train, X_test, y_test = main(config_path=args.config)

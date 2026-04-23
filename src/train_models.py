@@ -10,6 +10,8 @@
     pip install torch numpy pandas matplotlib
 """
 
+import copy
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -37,7 +39,7 @@ try:
     print(f"PyTorch 版本: {torch.__version__}")
 except ImportError:
     print("=" * 60)
-    print("❌ 错误：没有安装 PyTorch")
+    print("[ERROR] 错误：没有安装 PyTorch")
     print("=" * 60)
     print("请运行以下命令安装:")
     print("    pip install torch --index-url https://download.pytorch.org/whl/cpu")
@@ -62,11 +64,24 @@ def load_data():
         X_test = np.load('results/X_test.npy')
         y_test = np.load('results/y_test.npy')
     except FileNotFoundError:
-        print("❌ 找不到训练数据文件！")
+        print("[ERROR] 找不到训练数据文件！")
         print("   请先运行: python src/risk_pipeline.py")
         exit(1)
     
+    val_size = max(1, int(len(X_train) * 0.1))
+    if val_size >= len(X_train):
+        val_size = len(X_train) - 1
+
+    if val_size <= 0:
+        raise ValueError("训练集样本数量不足，无法切分验证集。")
+
+    X_val = X_train[-val_size:]
+    y_val = y_train[-val_size:]
+    X_train = X_train[:-val_size]
+    y_train = y_train[:-val_size]
+
     print(f"  训练集: X={X_train.shape}, y={y_train.shape}")
+    print(f"  验证集: X={X_val.shape}, y={y_val.shape}")
     print(f"  测试集: X={X_test.shape}, y={y_test.shape}")
     
     # 转换为 PyTorch 张量
@@ -74,14 +89,18 @@ def load_data():
     # 我们每条样本是12个时间步的1维序列，所以 features=1
     X_train_t = torch.FloatTensor(X_train).unsqueeze(-1)  # (6000, 12, 1)
     y_train_t = torch.FloatTensor(y_train)                # (6000, 1)
+    X_val_t = torch.FloatTensor(X_val).unsqueeze(-1)
+    y_val_t = torch.FloatTensor(y_val)
     X_test_t = torch.FloatTensor(X_test).unsqueeze(-1)    # (3000, 12, 1)
     y_test_t = torch.FloatTensor(y_test)                  # (3000, 1)
     
     # 构建 DataLoader
     train_dataset = TensorDataset(X_train_t, y_train_t)
+    val_dataset = TensorDataset(X_val_t, y_val_t)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
     
-    return train_loader, X_test_t, y_test_t
+    return train_loader, val_loader, X_test_t, y_test_t
 
 
 # ============================================================
@@ -236,13 +255,14 @@ class AttentionBiLSTMModel(nn.Module):
 # ============================================================
 # 3. 训练函数
 # ============================================================
-def train_model(model, train_loader, model_name, epochs=50, lr=1e-3, device='cpu'):
+def train_model(model, train_loader, val_loader, model_name, epochs=50, lr=1e-3, device='cpu', patience=10):
     """
     训练一个模型
     
     参数:
         model: 神经网络模型
         train_loader: 训练数据加载器
+        val_loader: 验证数据加载器
         model_name: 模型名称（用于打印）
         epochs: 训练轮数（论文用500，这里默认50先跑通）
         lr: 学习率
@@ -258,10 +278,13 @@ def train_model(model, train_loader, model_name, epochs=50, lr=1e-3, device='cpu
     criterion = nn.MSELoss()           # 损失函数：均方误差（论文用的 MSE）
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # 优化器：Adam
     
-    model.train()
-    loss_history = []
+    loss_history = {'train': [], 'val': []}
+    best_val_loss = float('inf')
+    best_state_dict = copy.deepcopy(model.state_dict())
+    epochs_without_improvement = 0
     
     for epoch in range(epochs):
+        model.train()
         epoch_loss = 0.0
         for batch_x, batch_y in train_loader:
             batch_x = batch_x.to(device)
@@ -283,14 +306,46 @@ def train_model(model, train_loader, model_name, epochs=50, lr=1e-3, device='cpu
             
             epoch_loss += loss.item()
         
-        avg_loss = epoch_loss / len(train_loader)
-        loss_history.append(avg_loss)
+        avg_train_loss = epoch_loss / len(train_loader)
+        loss_history['train'].append(avg_train_loss)
+
+        model.eval()
+        val_loss = 0.0
+        with torch.no_grad():
+            for val_x, val_y in val_loader:
+                val_x = val_x.to(device)
+                val_y = val_y.to(device)
+
+                if model_name == 'Attention-Bi-LSTM':
+                    val_outputs, _ = model(val_x)
+                else:
+                    val_outputs = model(val_x)
+
+                val_loss += criterion(val_outputs, val_y).item()
+
+        avg_val_loss = val_loss / len(val_loader)
+        loss_history['val'].append(avg_val_loss)
+
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_state_dict = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         
         # 每10轮打印一次
         if (epoch + 1) % 10 == 0:
-            print(f"  Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.6f}")
+            print(
+                f"  Epoch [{epoch+1}/{epochs}], "
+                f"Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}"
+            )
+
+        if epochs_without_improvement >= patience:
+            print(f"  [INFO] 验证集损失连续 {patience} 轮未改善，提前停止训练。")
+            break
     
-    print(f"  ✅ {model_name} 训练完成")
+    model.load_state_dict(best_state_dict)
+    print(f"  [OK] {model_name} 训练完成")
     return model, loss_history
 
 
@@ -337,7 +392,7 @@ def evaluate_model(model, X_test, y_test, model_name, device='cpu'):
     print(f"\n  [{model_name}] 测试结果:")
     print(f"    RMSE: {rmse:.6f}")
     print(f"    ARGE: {arge:.6f}")
-    print(f"    R²:   {r2:.6f}")
+    print(f"    R2:   {r2:.6f}")
     
     return {
         'RMSE': rmse,
@@ -407,7 +462,7 @@ def plot_predictions(y_test, results_dict, save_path='figures/04_prediction_comp
     plt.suptitle('模型预测结果对比', fontsize=14)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    plt.close()
     print(f"\n已保存预测对比图: {save_path}")
 
 
@@ -437,15 +492,15 @@ def plot_metrics_bar(results_dict, save_path='figures/05_metrics_comparison.png'
     
     # R²（越接近1越好）
     axes[2].bar(models, r2_vals, color=colors, alpha=0.8)
-    axes[2].set_title('R² (越接近1越好)', fontsize=12)
-    axes[2].set_ylabel('R²')
+    axes[2].set_title(r'$R^2$ (越接近1越好)', fontsize=12)
+    axes[2].set_ylabel(r'$R^2$')
     for i, v in enumerate(r2_vals):
         axes[2].text(i, v, f'{v:.4f}', ha='center', va='bottom', fontsize=9)
     
     plt.suptitle('三模型评价指标对比', fontsize=14)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    plt.close()
     print(f"已保存指标对比图: {save_path}")
 
 
@@ -453,11 +508,19 @@ def plot_metrics_bar(results_dict, save_path='figures/05_metrics_comparison.png'
 # 6. 主函数
 # ============================================================
 def main():
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('figures', exist_ok=True)
+
+    torch.manual_seed(42)
+    np.random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+
     print("=" * 60)
     print("神经网络训练脚本")
     print("模型: LSTM / Bi-LSTM / Attention-Bi-LSTM")
     print("=" * 60)
-    print("\n⚠️  提示：默认 epochs=50 适合快速验证。")
+    print("\n[WARN] 提示：默认 epochs=50 适合快速验证。")
     print("    论文用的 epochs=500，若算力充足可在下面修改。")
     print("    CPU 上跑 50 epoch 大约需要 2~5 分钟。")
     
@@ -468,7 +531,7 @@ def main():
         print("（提示：如果有 NVIDIA 显卡且装了 CUDA，训练会快很多）")
     
     # 加载数据
-    train_loader, X_test, y_test = load_data()
+    train_loader, val_loader, X_test, y_test = load_data()
     
     # 获取参数
     seq_len = X_test.shape[1]      # 12
@@ -479,17 +542,23 @@ def main():
     
     # -------- 训练 LSTM --------
     model_lstm = LSTMModel(input_size=input_size, hidden_size=128, num_layers=2)
-    model_lstm, loss_lstm = train_model(model_lstm, train_loader, 'LSTM', epochs=EPOCHS, device=device)
+    model_lstm, loss_lstm = train_model(
+        model_lstm, train_loader, val_loader, 'LSTM', epochs=EPOCHS, device=device
+    )
     result_lstm = evaluate_model(model_lstm, X_test, y_test, 'LSTM', device=device)
     
     # -------- 训练 Bi-LSTM --------
     model_bilstm = BiLSTMModel(input_size=input_size, hidden_size=128, num_layers=2)
-    model_bilstm, loss_bilstm = train_model(model_bilstm, train_loader, 'Bi-LSTM', epochs=EPOCHS, device=device)
+    model_bilstm, loss_bilstm = train_model(
+        model_bilstm, train_loader, val_loader, 'Bi-LSTM', epochs=EPOCHS, device=device
+    )
     result_bilstm = evaluate_model(model_bilstm, X_test, y_test, 'Bi-LSTM', device=device)
     
     # -------- 训练 Attention-Bi-LSTM --------
     model_att = AttentionBiLSTMModel(input_size=input_size, hidden_size=128, num_layers=2)
-    model_att, loss_att = train_model(model_att, train_loader, 'Attention-Bi-LSTM', epochs=EPOCHS, device=device)
+    model_att, loss_att = train_model(
+        model_att, train_loader, val_loader, 'Attention-Bi-LSTM', epochs=EPOCHS, device=device
+    )
     result_att = evaluate_model(model_att, X_test, y_test, 'Attention-Bi-LSTM', device=device)
     
     # -------- 汇总结果 --------
@@ -500,13 +569,13 @@ def main():
     }
     
     print("\n" + "=" * 60)
-    print("📊 三模型指标汇总")
+    print("[INFO] 三模型指标汇总")
     print("=" * 60)
     summary_df = pd.DataFrame({
         'LSTM': [result_lstm['RMSE'], result_lstm['ARGE'], result_lstm['R2']],
         'Bi-LSTM': [result_bilstm['RMSE'], result_bilstm['ARGE'], result_bilstm['R2']],
         'Attention-Bi-LSTM': [result_att['RMSE'], result_att['ARGE'], result_att['R2']],
-    }, index=['RMSE', 'ARGE', 'R²'])
+    }, index=['RMSE', 'ARGE', 'R2'])
     print(summary_df.to_string())
     
     # -------- 保存结果 --------
@@ -518,6 +587,12 @@ def main():
     np.save('results/y_pred_bilstm.npy', result_bilstm['y_pred'])
     np.save('results/y_pred_attention.npy', result_att['y_pred'])
     print("已保存预测结果: results/y_pred_*.npy")
+
+    # 保存模型权重
+    torch.save(model_lstm.state_dict(), 'results/model_lstm.pt')
+    torch.save(model_bilstm.state_dict(), 'results/model_bilstm.pt')
+    torch.save(model_att.state_dict(), 'results/model_attention.pt')
+    print("已保存模型权重: results/model_*.pt")
     
     # -------- 可视化 --------
     print("\n[可视化] 生成图表...")
@@ -525,7 +600,7 @@ def main():
     plot_metrics_bar(results_dict)
     
     print("\n" + "=" * 60)
-    print("✅ 全部完成！")
+    print("[OK] 全部完成！")
     print("  图表在 figures/ 文件夹里")
     print("  结果在 results/ 文件夹里")
     print("=" * 60)

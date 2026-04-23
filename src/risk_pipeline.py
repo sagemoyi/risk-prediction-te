@@ -13,6 +13,7 @@ TEP 风险序列生成 Pipeline
 如果想用真实数据，修改下面的 DATA_SOURCE 变量即可。
 """
 
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -21,6 +22,12 @@ import pywt
 import json
 import warnings
 warnings.filterwarnings('ignore')
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 # 导入数据加载器
 from data_loader import load_tep_data
@@ -181,7 +188,7 @@ def sliding_window_networks(data, window_size=150, step_size=1,
     adj_matrices = []
     window_indices = []
     
-    for start in range(0, n_samples - window_size + 1, step_size):
+    for start in tqdm(range(0, n_samples - window_size + 1, step_size), desc="构建网络"):
         end = start + window_size
         window_data = data[start:end, :]
         adj = build_adjacency_matrix(window_data, method=method, threshold=corr_threshold)
@@ -372,7 +379,7 @@ def plot_risk_sequences(risk_dict, save_path='figures/risk_sequences.png'):
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    plt.close()
     print(f'已保存: {save_path}')
 
 
@@ -395,7 +402,7 @@ def plot_risk_distribution(risk_dict, save_path='figures/risk_distribution.png')
     plt.suptitle('风险等级分布', fontsize=14, y=1.02)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    plt.close()
     print(f'已保存: {save_path}')
 
 
@@ -416,7 +423,7 @@ def plot_entropy_raw(entropy_dict, save_path='figures/entropy_raw.png'):
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
-    plt.show()
+    plt.close()
     print(f'已保存: {save_path}')
 
 
@@ -428,6 +435,9 @@ def main():
     完整 Pipeline 主函数：
     原始数据 → 小波去噪 → 滑动窗口 → 相关网络 → 结构熵 → 归一化 → 监督样本
     """
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('figures', exist_ok=True)
+
     print("=" * 60)
     print("TEP 风险序列生成 Pipeline")
     print("=" * 60)
@@ -554,7 +564,7 @@ def main():
     print("  已保存: results/config.json")
     
     print("\n" + "=" * 60)
-    print("✅ Pipeline 完成！")
+    print("[OK] Pipeline 完成！")
     print("  图表在 figures/ 文件夹里")
     print("  数据在 results/ 文件夹里")
     print("  下一步：训练 LSTM / Bi-LSTM / Attention-Bi-LSTM")
